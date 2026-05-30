@@ -1,0 +1,305 @@
+{
+  "name": "Asistente de Soporte Técnico",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "soporte",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-entrada",
+      "name": "Webhook entrada",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "soporte-tecnico-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validar que el body tenga el campo 'pregunta'\nconst body = $input.first().json.body || $input.first().json;\nconst pregunta = body.pregunta || body.question || body.mensaje || '';\n\nif (!pregunta || pregunta.trim().length === 0) {\n  return [{\n    json: {\n      valido: false,\n      error: 'El campo pregunta es requerido y no puede estar vacío.',\n      pregunta: ''\n    }\n  }];\n}\n\nif (pregunta.trim().length < 3) {\n  return [{\n    json: {\n      valido: false,\n      error: 'La pregunta es demasiado corta.',\n      pregunta: pregunta.trim()\n    }\n  }];\n}\n\nif (pregunta.trim().length > 2000) {\n  return [{\n    json: {\n      valido: false,\n      error: 'La pregunta supera el límite de 2000 caracteres.',\n      pregunta: pregunta.trim().substring(0, 50) + '...'\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    valido: true,\n    error: '',\n    pregunta: pregunta.trim(),\n    top_k: body.top_k || 4\n  }\n}];"
+      },
+      "id": "validar-input",
+      "name": "Validar input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condicion-valido",
+              "leftValue": "={{ $json.valido }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-input-valido",
+      "name": "¿Input válido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/consulta",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "pregunta",
+              "value": "={{ $json.pregunta }}"
+            },
+            {
+              "name": "top_k",
+              "value": "={{ $json.top_k }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "llamar-api-python",
+      "name": "Llamar API Python",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Procesar respuesta de app.py\nconst respuesta = $input.first().json;\nconst statusCode = respuesta.statusCode || 200;\nconst body = respuesta.body || respuesta;\n\n// Si la API devolvió error HTTP\nif (statusCode >= 400) {\n  return [{\n    json: {\n      exito: false,\n      respuesta: null,\n      mensaje_error: body.error || 'Error en el servicio de soporte.',\n      fuentes: [],\n      tiempo_segundos: 0,\n      status_code: statusCode\n    }\n  }];\n}\n\n// Respuesta exitosa\nconst metadata = body.metadata || {};\n\nreturn [{\n  json: {\n    exito: body.success === true,\n    respuesta: body.respuesta || null,\n    mensaje_error: body.error || null,\n    fuentes: metadata.fuentes || [],\n    fragmentos_usados: metadata.fragmentos_usados || 0,\n    encontrado_en_docs: metadata.encontrado_en_docs || false,\n    tiempo_segundos: metadata.tiempo_segundos || 0,\n    modelo: metadata.modelo || '',\n    status_code: statusCode\n  }\n}];"
+      },
+      "id": "procesar-respuesta",
+      "name": "Procesar respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": {{ $json.exito }},\n  \"respuesta\": {{ $json.respuesta !== null ? JSON.stringify($json.respuesta) : 'null' }},\n  \"metadata\": {\n    \"fuentes\": {{ JSON.stringify($json.fuentes) }},\n    \"fragmentos_usados\": {{ $json.fragmentos_usados }},\n    \"encontrado_en_docs\": {{ $json.encontrado_en_docs }},\n    \"tiempo_segundos\": {{ $json.tiempo_segundos }}\n  }\n}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "responder-ok",
+      "name": "Responder OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"respuesta\": null,\n  \"error\": {{ JSON.stringify($json.error || 'Input inválido') }}\n}",
+        "options": {
+          "responseCode": 400,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "responder-error-validacion",
+      "name": "Responder error validación",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"respuesta\": null,\n  \"error\": {{ JSON.stringify($json.mensaje_error || 'Error interno del servicio') }}\n}",
+        "options": {
+          "responseCode": 503,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "responder-error-api",
+      "name": "Responder error API",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condicion-exito",
+              "leftValue": "={{ $json.exito }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-api-exitosa",
+      "name": "¿API exitosa?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 380]
+    }
+  ],
+  "connections": {
+    "Webhook entrada": {
+      "main": [
+        [
+          {
+            "node": "Validar input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar input": {
+      "main": [
+        [
+          {
+            "node": "¿Input válido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Input válido?": {
+      "main": [
+        [
+          {
+            "node": "Llamar API Python",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder error validación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Llamar API Python": {
+      "main": [
+        [
+          {
+            "node": "Procesar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar respuesta": {
+      "main": [
+        [
+          {
+            "node": "¿API exitosa?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿API exitosa?": {
+      "main": [
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder error API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "asistente-soporte-local"
+  },
+  "tags": [
+    {
+      "name": "soporte",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ]
+}

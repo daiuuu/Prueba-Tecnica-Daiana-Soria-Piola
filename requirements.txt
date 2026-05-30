@@ -1,0 +1,16 @@
+# Servidor API
+fastapi==0.115.0
+uvicorn==0.30.6
+pydantic==2.8.2
+
+# OpenAI
+openai==1.51.0
+
+# Base de datos vectorial
+chromadb==0.5.15
+
+# Lectura de documentos
+pdfplumber==0.11.4
+
+# Variables de entorno
+python-dotenv==1.0.1
