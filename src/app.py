@@ -22,14 +22,13 @@ from pydantic import BaseModel, Field, field_validator
 
 load_dotenv()
 
-# Agregar src/ al path para importar módulos locales
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import (
     configurar_logging,
     verificar_entorno,
     validar_pregunta,
-    construir_prompt,
+    construir_prompt_con_historial,
     respuesta_ok,
     respuesta_error,
     InputInvalido,
@@ -41,14 +40,14 @@ from search import buscar, formatear_contexto
 # Configuración
 # ---------------------------------------------------------------------------
 
-LOG_LEVEL   = os.getenv("LOG_LEVEL", "INFO")
-PORT        = int(os.getenv("PORT", "8000"))
-OPENAI_KEY  = os.getenv("OPENAI_API_KEY", "")
+LOG_LEVEL    = os.getenv("LOG_LEVEL", "INFO")
+PORT         = int(os.getenv("PORT", "8000"))
+OPENAI_KEY   = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
-MAX_TOKENS  = int(os.getenv("MAX_TOKENS", "800"))
-TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
-TOP_K       = int(os.getenv("TOP_K", "4"))
-MIN_SCORE   = float(os.getenv("MIN_SCORE", "0.30"))
+MAX_TOKENS   = int(os.getenv("MAX_TOKENS", "800"))
+TEMPERATURE  = float(os.getenv("TEMPERATURE", "0.2"))
+TOP_K        = int(os.getenv("TOP_K", "4"))
+MIN_SCORE    = float(os.getenv("MIN_SCORE", "0.30"))
 
 configurar_logging(nivel=LOG_LEVEL, log_file="../logs/app.log")
 logger = logging.getLogger("app")
@@ -99,10 +98,10 @@ class ConsultaRequest(BaseModel):
 
 
 class ConsultaResponse(BaseModel):
-    success: bool
+    exito: bool
     respuesta: str | None
     error: str | None
-    metadata: dict
+    metadatos: dict
     timestamp: str
 
 
@@ -110,9 +109,10 @@ class ConsultaResponse(BaseModel):
 # Llamada al LLM
 # ---------------------------------------------------------------------------
 
-def llamar_llm(prompt: str) -> str:
+def llamar_llm(mensajes: list[dict]) -> str:
     """
-    Envía el prompt a OpenAI y retorna el texto de la respuesta.
+    Envía los mensajes a OpenAI en formato chat (system + user)
+    y retorna el texto de la respuesta.
     Maneja errores de API, timeout y rate limit con mensajes claros.
     """
     try:
@@ -130,7 +130,7 @@ def llamar_llm(prompt: str) -> str:
         try:
             respuesta = cliente.chat.completions.create(
                 model=OPENAI_MODEL,
-                messages=[{"role": "user", "content": prompt}],
+                messages=mensajes,
                 max_tokens=MAX_TOKENS,
                 temperature=TEMPERATURE,
             )
@@ -159,8 +159,7 @@ def llamar_llm(prompt: str) -> str:
 
 @app.get("/", tags=["Health"])
 async def health_check():
-    """Endpoint de verificación — n8n puede usarlo para confirmar que el servidor está activo."""
-    return {"status": "ok", "servicio": "Asistente de Soporte Técnico", "version": "1.0.0"}
+    return {"estado": "ok", "servicio": "Asistente de Soporte Técnico", "version": "1.0.0"}
 
 
 @app.post(
@@ -177,7 +176,7 @@ async def consulta(request: ConsultaRequest):
     Flujo:
       1. Valida el input
       2. Busca fragmentos relevantes en ChromaDB
-      3. Construye el prompt con el contexto
+      3. Construye los mensajes con el contexto (formato system/user)
       4. Llama a OpenAI
       5. Retorna la respuesta estructurada
     """
@@ -212,13 +211,17 @@ async def consulta(request: ConsultaRequest):
             ),
         )
 
-    # --- 3. Construir prompt ---
+    # --- 3. Construir mensajes para el LLM ---
     contexto = formatear_contexto(resultado_busqueda["resultados"])
-    prompt = construir_prompt(pregunta_limpia, contexto)
+    mensajes = construir_prompt_con_historial(
+        pregunta=pregunta_limpia,
+        contexto=contexto,
+        historial=[],
+    )
 
     # --- 4. Llamar al LLM ---
     try:
-        respuesta_llm = llamar_llm(prompt)
+        respuesta_llm = llamar_llm(mensajes)
     except RuntimeError as e:
         logger.error(f"Error en LLM: {e}")
         return JSONResponse(
@@ -234,29 +237,28 @@ async def consulta(request: ConsultaRequest):
     tiempo_total = round(time.time() - tiempo_inicio, 2)
     fuentes = list({r["source"] for r in resultado_busqueda["resultados"]})
 
-    metadata = {
+    metadatos = {
         "encontrado_en_docs": resultado_busqueda["encontrado"],
-        "fragmentos_usados": len(resultado_busqueda["resultados"]),
-        "fuentes": fuentes,
-        "tiempo_segundos": tiempo_total,
-        "modelo": OPENAI_MODEL,
+        "fragmentos_usados":  len(resultado_busqueda["resultados"]),
+        "fuentes":            fuentes,
+        "tiempo_segundos":    tiempo_total,
+        "modelo":             OPENAI_MODEL,
     }
 
     logger.info(
         f"Respuesta generada en {tiempo_total}s | "
-        f"Fragmentos: {metadata['fragmentos_usados']} | "
+        f"Fragmentos: {metadatos['fragmentos_usados']} | "
         f"Fuentes: {fuentes}"
     )
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,
-        content=respuesta_ok(respuesta_llm, metadata),
+        content=respuesta_ok(respuesta_llm, metadatos),
     )
 
 
 @app.exception_handler(Exception)
 async def handler_global(request: Request, exc: Exception):
-    """Captura cualquier excepción no manejada y devuelve un 500 limpio."""
     logger.error(f"Error no manejado: {exc}", exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

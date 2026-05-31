@@ -119,26 +119,27 @@ def validar_top_k(valor) -> int:
 # Construcción del prompt
 # ---------------------------------------------------------------------------
 
-PROMPT_TEMPLATE = """Sos un asistente de soporte técnico especializado.
-Tu única fuente de información es la documentación técnica proporcionada.
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
 
-REGLAS ESTRICTAS:
-1. Respondé ÚNICAMENTE basándote en el contexto proporcionado.
-2. Si la información no está en el contexto, decilo claramente.
-3. No inventes soluciones, pasos ni datos que no estén en la documentación.
-4. Respondé en español, de forma clara y estructurada.
-5. Si hay pasos a seguir, presentalos numerados.
-6. Citá la fuente cuando sea relevante (nombre del documento).
 
-CONTEXTO DE LA DOCUMENTACIÓN:
-{contexto}
+def _cargar_prompt(nombre_archivo: str) -> str:
+    """
+    Lee un archivo de prompt desde src/prompts/.
+    Lanza FileNotFoundError con mensaje claro si no existe.
+    """
+    ruta = _PROMPTS_DIR / nombre_archivo
+    if not ruta.exists():
+        raise FileNotFoundError(
+            f"Archivo de prompt no encontrado: {ruta}\n"
+            "Verificá que la carpeta src/prompts/ exista y contenga el archivo."
+        )
+    return ruta.read_text(encoding="utf-8")
 
-PREGUNTA DEL USUARIO:
-{pregunta}
 
-RESPUESTA:"""
+# Se cargan una sola vez al importar el módulo
+_PROMPT_CON_CONTEXTO = _cargar_prompt("support_prompt.txt")
 
-PROMPT_SIN_CONTEXTO = """Sos un asistente de soporte técnico especializado.
+_PROMPT_SIN_CONTEXTO = """Sos un asistente de soporte técnico especializado.
 Tu única fuente de información es la documentación técnica interna de la empresa.
 
 El usuario realizó la siguiente consulta, pero no se encontró información
@@ -150,7 +151,7 @@ PREGUNTA DEL USUARIO:
 Informale al usuario de forma amable que:
 1. No encontraste información relacionada con su consulta en la documentación.
 2. Le recomendés contactar al soporte técnico directamente.
-3. Le des el contacto si está disponible: soporte.minecatalog@empresa.com
+3. El contacto disponible es: soporte.minecatalog@empresa.com
 
 Respondé en español, de forma breve y cordial."""
 
@@ -158,16 +159,16 @@ Respondé en español, de forma breve y cordial."""
 def construir_prompt(pregunta: str, contexto: str) -> str:
     """
     Construye el prompt final para enviar al LLM.
-    Usa la plantilla con contexto si hay información,
-    o la plantilla sin contexto si no se encontró nada.
+    Usa support_prompt.txt (con placeholders {contexto} y {pregunta})
+    si hay fragmentos relevantes, o la plantilla de "sin información" si no.
     """
     if contexto and contexto.strip():
-        return PROMPT_TEMPLATE.format(
+        return _PROMPT_CON_CONTEXTO.format(
             contexto=contexto.strip(),
             pregunta=pregunta.strip(),
         )
     else:
-        return PROMPT_SIN_CONTEXTO.format(pregunta=pregunta.strip())
+        return _PROMPT_SIN_CONTEXTO.format(pregunta=pregunta.strip())
 
 
 def construir_prompt_con_historial(
@@ -204,12 +205,8 @@ def construir_prompt_con_historial(
 # ---------------------------------------------------------------------------
 
 def respuesta_error(mensaje: str, codigo: int = 500) -> dict:
-    """
-    Genera un dict de respuesta de error estandarizado.
-    app.py lo usa para responder siempre con la misma estructura.
-    """
     return {
-        "success": False,
+        "exito": False,
         "respuesta": None,
         "error": mensaje,
         "codigo": codigo,
@@ -217,15 +214,12 @@ def respuesta_error(mensaje: str, codigo: int = 500) -> dict:
     }
 
 
-def respuesta_ok(respuesta: str, metadata: dict | None = None) -> dict:
-    """
-    Genera un dict de respuesta exitosa estandarizado.
-    """
+def respuesta_ok(respuesta: str, metadatos: dict | None = None) -> dict:
     return {
-        "success": True,
+        "exito": True,
         "respuesta": respuesta,
         "error": None,
-        "metadata": metadata or {},
+        "metadatos": metadatos or {},
         "timestamp": datetime.utcnow().isoformat(),
     }
 

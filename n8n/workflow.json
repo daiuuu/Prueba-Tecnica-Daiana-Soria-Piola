@@ -98,7 +98,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Procesar respuesta de app.py\nconst respuesta = $input.first().json;\nconst statusCode = respuesta.statusCode || 200;\nconst body = respuesta.body || respuesta;\n\n// Si la API devolvió error HTTP\nif (statusCode >= 400) {\n  return [{\n    json: {\n      exito: false,\n      respuesta: null,\n      mensaje_error: body.error || 'Error en el servicio de soporte.',\n      fuentes: [],\n      tiempo_segundos: 0,\n      status_code: statusCode\n    }\n  }];\n}\n\n// Respuesta exitosa\nconst metadata = body.metadata || {};\n\nreturn [{\n  json: {\n    exito: body.success === true,\n    respuesta: body.respuesta || null,\n    mensaje_error: body.error || null,\n    fuentes: metadata.fuentes || [],\n    fragmentos_usados: metadata.fragmentos_usados || 0,\n    encontrado_en_docs: metadata.encontrado_en_docs || false,\n    tiempo_segundos: metadata.tiempo_segundos || 0,\n    modelo: metadata.modelo || '',\n    status_code: statusCode\n  }\n}];"
+        "jsCode": "// Procesar respuesta de app.py\nconst respuesta = $input.first().json;\nconst statusCode = respuesta.statusCode || 200;\nconst body = respuesta.body || respuesta;\n\n// Si la API devolvió error HTTP\nif (statusCode >= 400) {\n  return [{\n    json: {\n      exito: false,\n      respuesta: null,\n      mensaje_error: body.error || 'Error en el servicio de soporte.',\n      fuentes: [],\n      tiempo_segundos: 0,\n      status_code: statusCode\n    }\n  }];\n}\n\n// Respuesta exitosa\nconst metadatos = body.metadatos || {};\n\nreturn [{\n  json: {\n    exito: body.exito === true,\n    respuesta: body.respuesta || null,\n    mensaje_error: body.error || null,\n    fuentes: metadatos.fuentes || [],\n    fragmentos_usados: metadatos.fragmentos_usados || 0,\n    encontrado_en_docs: metadatos.encontrado_en_docs || false,\n    tiempo_segundos: metadatos.tiempo_segundos || 0,\n    modelo: metadatos.modelo || '',\n    status_code: statusCode\n  }\n}];"
       },
       "id": "procesar-respuesta",
       "name": "Procesar respuesta",
@@ -109,7 +109,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={\n  \"success\": {{ $json.exito }},\n  \"respuesta\": {{ $json.respuesta !== null ? JSON.stringify($json.respuesta) : 'null' }},\n  \"metadata\": {\n    \"fuentes\": {{ JSON.stringify($json.fuentes) }},\n    \"fragmentos_usados\": {{ $json.fragmentos_usados }},\n    \"encontrado_en_docs\": {{ $json.encontrado_en_docs }},\n    \"tiempo_segundos\": {{ $json.tiempo_segundos }}\n  }\n}",
+        "responseBody": "={\n  \"exito\": {{ $json.exito }},\n  \"respuesta\": {{ $json.respuesta !== null ? JSON.stringify($json.respuesta) : 'null' }},\n  \"metadatos\": {\n    \"fuentes\": {{ JSON.stringify($json.fuentes) }},\n    \"fragmentos_usados\": {{ $json.fragmentos_usados }},\n    \"encontrado_en_docs\": {{ $json.encontrado_en_docs }},\n    \"tiempo_segundos\": {{ $json.tiempo_segundos }}\n  }\n}",
         "options": {
           "responseCode": 200,
           "responseHeaders": {
@@ -131,7 +131,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={\n  \"success\": false,\n  \"respuesta\": null,\n  \"error\": {{ JSON.stringify($json.error || 'Input inválido') }}\n}",
+        "responseBody": "={\n  \"exito\": false,\n  \"respuesta\": null,\n  \"error\": {{ JSON.stringify($json.error || 'Input inválido') }}\n}",
         "options": {
           "responseCode": 400,
           "responseHeaders": {
@@ -153,7 +153,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={\n  \"success\": false,\n  \"respuesta\": null,\n  \"error\": {{ JSON.stringify($json.mensaje_error || 'Error interno del servicio') }}\n}",
+        "responseBody": "={\n  \"exito\": false,\n  \"respuesta\": null,\n  \"error\": {{ JSON.stringify($json.mensaje_error || 'Error interno del servicio') }}\n}",
         "options": {
           "responseCode": 503,
           "responseHeaders": {

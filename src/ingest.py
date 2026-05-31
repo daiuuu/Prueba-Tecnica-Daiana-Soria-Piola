@@ -1,14 +1,14 @@
 """
 ingest.py
 Orquesta el pipeline completo de ingesta:
-  1. Carga documentos con loaders.py
-  2. Divide en chunks con overlap
+  1. Carga documentos con loaders.py (división structure-based)
+  2. Aplica corte de seguridad solo a fragmentos excesivamente largos
   3. Genera embeddings con OpenAI
   4. Indexa en ChromaDB
 
 Uso desde terminal:
     python ingest.py
-    python ingest.py --docs ../docs --db ../data/chroma_db --chunk-size 400 --overlap 80
+    python ingest.py --docs ../docs --db ../data/chroma_db --max-chars 1200
 """
 
 import argparse
@@ -36,65 +36,71 @@ logger = logging.getLogger("ingest")
 # ---------------------------------------------------------------------------
 # Constantes por defecto (sobreescribibles vía args o .env)
 # ---------------------------------------------------------------------------
-DOCS_DIR = Path(os.getenv("DOCS_DIR", "../docs"))
-CHROMA_DIR = Path(os.getenv("CHROMA_DIR", "../data/chroma_db"))
+DOCS_DIR        = Path(os.getenv("DOCS_DIR", "../docs"))
+CHROMA_DIR      = Path(os.getenv("CHROMA_DIR", "../data/chroma_db"))
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "soporte_docs")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 400))      # caracteres por chunk
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 80)) # solapamiento entre chunks
+# Límite de seguridad: fragmentos más largos que esto se cortan en párrafos.
+# No es el tamaño del chunk objetivo — los loaders ya definen eso
+# por estructura. Este valor solo actúa como techo de emergencia.
+MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", 1200))
 
 
 # ---------------------------------------------------------------------------
-# Chunking
+# Chunking structure-based con corte de seguridad
 # ---------------------------------------------------------------------------
 
-def dividir_en_chunks(texto: str, chunk_size: int, overlap: int) -> list[str]:
+def chunkear_fragmento(fragmento: dict, max_chars: int) -> list[dict]:
     """
-    Divide un texto en chunks de tamaño máximo `chunk_size` caracteres,
-    con `overlap` caracteres de solapamiento entre chunks consecutivos.
-    Intenta respetar párrafos y oraciones como límites naturales de corte.
+    Recibe un fragmento producido por un loader y lo devuelve como uno o
+    más chunks, preservando los metadatos originales.
+
+    Estrategia:
+      - Si el contenido entra en max_chars → devuelve el fragmento tal cual.
+      - Si no → lo divide por párrafos (doble salto de línea), que es el
+        límite estructural más natural que queda después del trabajo del loader.
+        Nunca corta por caracteres arbitrarios: si un párrafo solo ya supera
+        max_chars, se incluye igual como un chunk único antes de seguir.
+
+    Preserva la coherencia semántica: un chunk siempre contiene
+    secciones o párrafos completos, nunca fragmentos a mitad de oración.
     """
-    if not texto or not texto.strip():
+    contenido = fragmento.get("content", "").strip()
+    if not contenido:
         return []
 
-    # Si el texto ya cabe en un chunk, devolverlo directo
-    if len(texto) <= chunk_size:
-        return [texto.strip()]
+    # Caso feliz: el fragmento cabe entero
+    if len(contenido) <= max_chars:
+        return [fragmento]
 
-    chunks = []
-    inicio = 0
+    # Corte de seguridad por párrafos
+    parrafos = [p.strip() for p in contenido.split("\n\n") if p.strip()]
+    chunks_resultantes = []
+    acumulado = ""
 
-    while inicio < len(texto):
-        fin = inicio + chunk_size
+    for parrafo in parrafos:
+        if not acumulado:
+            acumulado = parrafo
+        elif len(acumulado) + len(parrafo) + 2 <= max_chars:
+            acumulado += "\n\n" + parrafo
+        else:
+            # Guardar lo acumulado y empezar nuevo chunk
+            chunk = {**fragmento, "content": acumulado}
+            chunks_resultantes.append(chunk)
+            acumulado = parrafo
 
-        if fin >= len(texto):
-            # Último fragmento
-            chunk = texto[inicio:].strip()
-            if chunk:
-                chunks.append(chunk)
-            break
+    # Último acumulado
+    if acumulado:
+        chunk = {**fragmento, "content": acumulado}
+        chunks_resultantes.append(chunk)
 
-        # Buscar un corte natural: doble salto → salto → punto → espacio
-        corte = None
-        for separador in ["\n\n", "\n", ". ", " "]:
-            pos = texto.rfind(separador, inicio, fin)
-            if pos > inicio:
-                corte = pos + len(separador)
-                break
-
-        if corte is None:
-            corte = fin  # corte duro si no hay separador
-
-        chunk = texto[inicio:corte].strip()
-        if chunk:
-            chunks.append(chunk)
-
-        # Retroceder `overlap` chars para el próximo chunk
-        inicio = max(corte - overlap, inicio + 1)
-
-    return chunks
+    logger.debug(
+        f"Fragmento largo ({len(contenido)} chars) dividido en "
+        f"{len(chunks_resultantes)} chunks por párrafos"
+    )
+    return chunks_resultantes
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +124,7 @@ def generar_embeddings(textos: list[str], modelo: str, api_key: str) -> list[lis
         sys.exit(1)
 
     cliente = OpenAI(api_key=api_key)
-    BATCH_SIZE = 512  # conservador para evitar límites de tokens
+    BATCH_SIZE = 512
     todos_los_vectores = []
 
     for i in range(0, len(textos), BATCH_SIZE):
@@ -172,8 +178,6 @@ def obtener_coleccion(chroma_dir: Path, collection_name: str):
     chroma_dir.mkdir(parents=True, exist_ok=True)
     cliente = chromadb.PersistentClient(path=str(chroma_dir))
 
-    # Obtener o crear colección. embedding_function=None porque
-    # vamos a pasar los vectores directamente.
     coleccion = cliente.get_or_create_collection(
         name=collection_name,
         metadata={"hnsw:space": "cosine"},
@@ -201,7 +205,6 @@ def indexar_chunks(
 
     ids = [str(uuid.uuid4()) for _ in chunks]
 
-    # ChromaDB acepta metadatos con valores str, int, float, bool únicamente
     metadatos_limpios = []
     for meta in metadatos:
         meta_limpio = {}
@@ -229,31 +232,27 @@ def run_ingesta(
     docs_dir: Path,
     chroma_dir: Path,
     collection_name: str,
-    chunk_size: int,
-    overlap: int,
+    max_chars: int,
     embedding_model: str,
     api_key: str,
     limpiar_coleccion: bool = False,
 ) -> None:
     """
     Pipeline completo:
-      cargar → chunkear → embedir → indexar
+      cargar → chunkear por estructura → embedir → indexar
     """
-
-    # --- Importar loaders aquí para evitar dependencia circular ---
     try:
         from loaders import cargar_directorio
     except ImportError:
-        # Si se ejecuta desde src/ directamente
         sys.path.insert(0, str(Path(__file__).parent))
         from loaders import cargar_directorio
 
     logger.info("=" * 60)
-    logger.info("INICIO DE INGESTA")
+    logger.info("INICIO DE INGESTA (structure-based chunking)")
     logger.info(f"  Docs:       {docs_dir.resolve()}")
     logger.info(f"  ChromaDB:   {chroma_dir.resolve()}")
     logger.info(f"  Colección:  {collection_name}")
-    logger.info(f"  Chunk size: {chunk_size} chars | Overlap: {overlap} chars")
+    logger.info(f"  Max chars:  {max_chars} (corte de seguridad)")
     logger.info(f"  Modelo:     {embedding_model}")
     logger.info("=" * 60)
 
@@ -265,35 +264,40 @@ def run_ingesta(
         logger.error("No se encontraron documentos en el directorio especificado.")
         sys.exit(1)
 
-    logger.info(f"  Fragmentos cargados: {len(fragmentos)}")
+    logger.info(f"  Fragmentos estructurales cargados: {len(fragmentos)}")
 
-    # 2. Dividir en chunks
-    logger.info("Paso 2/4: Generando chunks...")
+    # 2. Aplicar corte de seguridad a fragmentos excesivamente largos
+    logger.info("Paso 2/4: Aplicando corte de seguridad...")
     todos_los_chunks = []
     todos_los_metadatos = []
+    fragmentos_cortados = 0
 
     for fragmento in fragmentos:
-        contenido = fragmento.get("content", "")
-        if not contenido:
-            continue
+        chunks = chunkear_fragmento(fragmento, max_chars)
 
-        sub_chunks = dividir_en_chunks(contenido, chunk_size, overlap)
+        if len(chunks) > 1:
+            fragmentos_cortados += 1
 
-        for i, chunk in enumerate(sub_chunks):
-            todos_los_chunks.append(chunk)
+        for i, chunk in enumerate(chunks):
+            todos_los_chunks.append(chunk["content"])
             todos_los_metadatos.append({
-                "source": fragmento.get("source", "desconocido"),
-                "type": fragmento.get("type", ""),
+                "source":      chunk.get("source", "desconocido"),
+                "type":        chunk.get("type", ""),
                 "chunk_index": i,
-                "page": fragmento.get("page", 0),
-                "doc_id": fragmento.get("id", ""),
+                "page":        chunk.get("page", 0),
+                "doc_id":      chunk.get("id", ""),
             })
 
     if not todos_los_chunks:
         logger.error("No se generaron chunks. Verificá el contenido de los documentos.")
         sys.exit(1)
 
-    logger.info(f"  Total de chunks generados: {len(todos_los_chunks)}")
+    logger.info(f"  Chunks finales: {len(todos_los_chunks)}")
+    if fragmentos_cortados:
+        logger.info(
+            f"  Fragmentos que superaron {max_chars} chars y fueron cortados: "
+            f"{fragmentos_cortados}"
+        )
 
     # 3. Generar embeddings
     logger.info("Paso 3/4: Generando embeddings con OpenAI...")
@@ -325,7 +329,7 @@ def run_ingesta(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Ingesta de documentación técnica en ChromaDB"
+        description="Ingesta de documentación técnica en ChromaDB (structure-based chunking)"
     )
     parser.add_argument(
         "--docs",
@@ -345,16 +349,14 @@ def parse_args():
         help=f"Nombre de la colección (default: {COLLECTION_NAME})",
     )
     parser.add_argument(
-        "--chunk-size",
+        "--max-chars",
         type=int,
-        default=CHUNK_SIZE,
-        help=f"Tamaño máximo de chunk en caracteres (default: {CHUNK_SIZE})",
-    )
-    parser.add_argument(
-        "--overlap",
-        type=int,
-        default=CHUNK_OVERLAP,
-        help=f"Solapamiento entre chunks (default: {CHUNK_OVERLAP})",
+        default=MAX_CHUNK_CHARS,
+        help=(
+            f"Límite de caracteres por chunk (default: {MAX_CHUNK_CHARS}). "
+            "Solo se aplica como corte de seguridad a fragmentos muy largos; "
+            "la división principal la hacen los loaders por estructura."
+        ),
     )
     parser.add_argument(
         "--limpiar",
@@ -370,8 +372,7 @@ if __name__ == "__main__":
         docs_dir=args.docs,
         chroma_dir=args.db,
         collection_name=args.collection,
-        chunk_size=args.chunk_size,
-        overlap=args.overlap,
+        max_chars=args.max_chars,
         embedding_model=EMBEDDING_MODEL,
         api_key=OPENAI_API_KEY,
         limpiar_coleccion=args.limpiar,

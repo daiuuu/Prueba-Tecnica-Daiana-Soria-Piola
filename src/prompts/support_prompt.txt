@@ -76,3 +76,13 @@ Respuesta correcta:
 documentación disponible. Te recomiendo contactar al soporte técnico:
 - Correo: soporte.minecatalog@empresa.com
 - Horario: lunes a viernes, 08:00 a 17:00"
+
+---
+
+CONTEXTO DE LA DOCUMENTACIÓN:
+{contexto}
+
+PREGUNTA DEL USUARIO:
+{pregunta}
+
+RESPUESTA:

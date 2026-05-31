@@ -5,6 +5,7 @@ pydantic==2.8.2
 
 # OpenAI
 openai==1.51.0
+httpx==0.27.2
 
 # Base de datos vectorial
 chromadb==0.5.15

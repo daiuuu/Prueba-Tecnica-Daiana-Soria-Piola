@@ -1,5 +1,5 @@
 # =============================================================================
-# SECRETOS — nunca subir al repositorio
+# No subir al repositorio archivos sensibles, bases de datos generadas y logs
 # =============================================================================
 .env
 

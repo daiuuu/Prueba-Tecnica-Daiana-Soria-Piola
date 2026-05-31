@@ -212,7 +212,7 @@ def buscar(
     for doc, meta, distancia in zip(documentos, metadatos, distancias):
         # ChromaDB con distancia coseno devuelve valores entre 0 y 2.
         # Convertimos a similitud: 1 - (distancia / 2), rango [0, 1].
-        similitud = round(1 - (distancia / 2), 4)
+        similitud = round(1 - distancia, 4)
 
         if similitud < min_score:
             logger.debug(
