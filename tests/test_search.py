@@ -77,6 +77,20 @@ def test_pregunta_none():
         _validar_pregunta(None)
 
 
+def test_pregunta_exactamente_limite():
+    pregunta = "a" * 2000
+
+    resultado = _validar_pregunta(pregunta)
+
+    assert len(resultado) == 2000
+
+
+def test_pregunta_exactamente_minimo():
+    resultado = _validar_pregunta("abc")
+
+    assert resultado == "abc"
+
+
 # ==========================================================
 # Tests de formatear_contexto()
 # ==========================================================
@@ -141,3 +155,25 @@ def test_formatear_contexto_respeta_limite():
 
     assert len(contexto) <= 520
     assert "truncado" in contexto
+
+
+def test_formatear_contexto_orden_fragmentos():
+    resultados = [
+        {"content": "Fragmento uno", "source": "a.txt", "score": 0.90},
+        {"content": "Fragmento dos", "source": "b.txt", "score": 0.85},
+    ]
+
+    contexto = formatear_contexto(resultados)
+
+    assert contexto.index("Fragmento uno") < contexto.index("Fragmento dos")
+
+
+def test_formatear_contexto_sin_source():
+    resultados = [
+        {"content": "Contenido sin source", "score": 0.80}
+    ]
+
+    contexto = formatear_contexto(resultados)
+
+    assert "Contenido sin source" in contexto
+    assert "desconocido" in contexto

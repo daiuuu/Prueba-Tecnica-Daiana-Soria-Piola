@@ -194,7 +194,7 @@ def construir_prompt_con_historial(
         system_content += f"\n\nDOCUMENTACIÓN RELEVANTE:\n{contexto.strip()}"
 
     mensajes = [{"role": "system", "content": system_content}]
-    mensajes.extend(historial[-6:])  # máximo 3 turnos de historial
+    mensajes.extend(historial[-6:])
     mensajes.append({"role": "user", "content": pregunta.strip()})
 
     return mensajes
