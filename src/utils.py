@@ -139,6 +139,10 @@ def _cargar_prompt(nombre_archivo: str) -> str:
 # Se cargan una sola vez al importar el módulo
 _PROMPT_CON_CONTEXTO = _cargar_prompt("support_prompt.txt")
 
+# Parte de instrucciones del prompt (sin los placeholders de contexto y pregunta).
+# Se usa como system message en construir_prompt_con_historial().
+_INSTRUCCIONES_BASE = _PROMPT_CON_CONTEXTO.rsplit("\n---\n", 1)[0].strip()
+
 _PROMPT_SIN_CONTEXTO = """Sos un asistente de soporte técnico especializado.
 Tu única fuente de información es la documentación técnica interna de la empresa.
 
@@ -179,19 +183,24 @@ def construir_prompt_con_historial(
     """
     Construye la lista de mensajes para la API de OpenAI con formato
     de chat (system + historial + user actual).
-    Útil si en el futuro querés soportar conversaciones multi-turno.
+    Usa las instrucciones completas de support_prompt.txt como system message.
 
     historial: lista de dicts [{"role": "user"|"assistant", "content": "..."}]
     """
-    system_content = (
-        "Sos un asistente de soporte técnico especializado. "
-        "Respondé ÚNICAMENTE basándote en la documentación proporcionada. "
-        "Si la información no está disponible, indicalo claramente. "
-        "Respondé siempre en español."
-    )
-
     if contexto and contexto.strip():
-        system_content += f"\n\nDOCUMENTACIÓN RELEVANTE:\n{contexto.strip()}"
+        system_content = (
+            _INSTRUCCIONES_BASE
+            + "\n\n---\n\nCONTEXTO DE LA DOCUMENTACIÓN:\n"
+            + contexto.strip()
+        )
+    else:
+        system_content = (
+            _INSTRUCCIONES_BASE
+            + "\n\nNo se encontró documentación relevante para esta consulta. "
+            "Informale al usuario que no hay información disponible en la documentación "
+            "y que contacte a soporte.minecatalog@empresa.com "
+            "de lunes a viernes de 08:00 a 17:00."
+        )
 
     mensajes = [{"role": "system", "content": system_content}]
     mensajes.extend(historial[-6:])

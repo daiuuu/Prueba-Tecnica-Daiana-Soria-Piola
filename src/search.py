@@ -25,12 +25,34 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Constantes (sobreescribibles vía .env)
 # ---------------------------------------------------------------------------
+_BASE_DIR        = Path(__file__).parent.parent
 OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")
 EMBEDDING_MODEL  = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-CHROMA_DIR       = Path(os.getenv("CHROMA_DIR", "../data/chroma_db"))
+CHROMA_DIR       = Path(os.getenv("CHROMA_DIR", str(_BASE_DIR / "data" / "chroma_db")))
 COLLECTION_NAME  = os.getenv("CHROMA_COLLECTION", "soporte_docs")
 TOP_K_DEFAULT    = int(os.getenv("TOP_K", "4"))
-MIN_SCORE        = float(os.getenv("MIN_SCORE", "0.30"))  # distancia coseno mínima aceptable
+MIN_SCORE        = float(os.getenv("MIN_SCORE", "0.30"))
+
+# ---------------------------------------------------------------------------
+# Singletons: cliente OpenAI y caché de colecciones ChromaDB
+# Evitan reconexiones costosas en cada llamada a buscar()
+# ---------------------------------------------------------------------------
+_openai_client = None
+_collection_cache: dict = {}
+
+
+def _get_cliente_openai() -> "OpenAI":
+    global _openai_client
+    if _openai_client is None:
+        if not OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY no configurada en .env")
+        try:
+            from openai import OpenAI
+        except ImportError:
+            logger.error("openai no instalado. Ejecutá: pip install openai")
+            sys.exit(1)
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY, timeout=15.0)
+    return _openai_client
 
 
 # ---------------------------------------------------------------------------
@@ -62,17 +84,15 @@ def _validar_pregunta(pregunta: str) -> str:
 def _embedding_con_retry(texto: str, modelo: str, api_key: str) -> list[float]:
     """
     Genera el embedding de un texto con hasta 3 reintentos (backoff exponencial).
+    Usa el cliente OpenAI singleton para evitar reconexiones.
     """
     try:
-        from openai import OpenAI, APIError, APITimeoutError, RateLimitError
+        from openai import APIError, APITimeoutError, RateLimitError
     except ImportError:
         logger.error("openai no instalado. Ejecutá: pip install openai")
         sys.exit(1)
 
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY no configurada en .env")
-
-    cliente = OpenAI(api_key=api_key, timeout=15.0)
+    cliente = _get_cliente_openai()
     max_intentos = 3
 
     for intento in range(1, max_intentos + 1):
@@ -100,8 +120,13 @@ def _embedding_con_retry(texto: str, modelo: str, api_key: str) -> list[float]:
 def _obtener_coleccion(chroma_dir: Path, collection_name: str):
     """
     Conecta a ChromaDB y retorna la colección.
-    Lanza RuntimeError si la colección no existe o está vacía.
+    Cachea el resultado por (chroma_dir, collection_name) para evitar
+    reconexiones en cada búsqueda. Solo falla en cache miss.
     """
+    cache_key = (str(chroma_dir), collection_name)
+    if cache_key in _collection_cache:
+        return _collection_cache[cache_key]
+
     try:
         import chromadb
     except ImportError:
@@ -114,16 +139,16 @@ def _obtener_coleccion(chroma_dir: Path, collection_name: str):
             "Ejecutá primero: python ingest.py"
         )
 
-    cliente = chromadb.PersistentClient(path=str(chroma_dir))
+    cliente_chroma = chromadb.PersistentClient(path=str(chroma_dir))
 
-    colecciones_existentes = [c.name for c in cliente.list_collections()]
+    colecciones_existentes = [c.name for c in cliente_chroma.list_collections()]
     if collection_name not in colecciones_existentes:
         raise RuntimeError(
             f"La colección '{collection_name}' no existe en ChromaDB.\n"
             "Ejecutá primero: python ingest.py"
         )
 
-    coleccion = cliente.get_collection(name=collection_name)
+    coleccion = cliente_chroma.get_collection(name=collection_name)
 
     if coleccion.count() == 0:
         raise RuntimeError(
@@ -131,6 +156,7 @@ def _obtener_coleccion(chroma_dir: Path, collection_name: str):
             "Ejecutá: python ingest.py para cargar documentos."
         )
 
+    _collection_cache[cache_key] = coleccion
     return coleccion
 
 

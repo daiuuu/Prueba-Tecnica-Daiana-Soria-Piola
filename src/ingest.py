@@ -36,8 +36,9 @@ logger = logging.getLogger("ingest")
 # ---------------------------------------------------------------------------
 # Constantes por defecto (sobreescribibles vía args o .env)
 # ---------------------------------------------------------------------------
-DOCS_DIR        = Path(os.getenv("DOCS_DIR", "../docs"))
-CHROMA_DIR      = Path(os.getenv("CHROMA_DIR", "../data/chroma_db"))
+_BASE_DIR       = Path(__file__).parent.parent
+DOCS_DIR        = Path(os.getenv("DOCS_DIR", str(_BASE_DIR / "docs")))
+CHROMA_DIR      = Path(os.getenv("CHROMA_DIR", str(_BASE_DIR / "data" / "chroma_db")))
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "soporte_docs")
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")

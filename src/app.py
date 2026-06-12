@@ -4,8 +4,8 @@ Servidor FastAPI — punto de entrada HTTP del asistente de soporte.
 Expone un endpoint POST /consulta que n8n llama vía webhook.
 
 Uso:
-    uvicorn app:app --reload --port 8000
-    python app.py
+    uvicorn src.app:app --reload --port 8000   (desde la raíz del proyecto)
+    python app.py                               (desde src/)
 """
 
 import logging
@@ -40,6 +40,7 @@ from search import buscar, formatear_contexto
 # Configuración
 # ---------------------------------------------------------------------------
 
+_BASE_DIR    = Path(__file__).parent.parent
 LOG_LEVEL    = os.getenv("LOG_LEVEL", "INFO")
 PORT         = int(os.getenv("PORT", "8000"))
 OPENAI_KEY   = os.getenv("OPENAI_API_KEY", "")
@@ -49,8 +50,28 @@ TEMPERATURE  = float(os.getenv("TEMPERATURE", "0.2"))
 TOP_K        = int(os.getenv("TOP_K", "4"))
 MIN_SCORE    = float(os.getenv("MIN_SCORE", "0.30"))
 
-configurar_logging(nivel=LOG_LEVEL, log_file="../logs/app.log")
+configurar_logging(nivel=LOG_LEVEL, log_file=str(_BASE_DIR / "logs" / "app.log"))
 logger = logging.getLogger("app")
+
+# ---------------------------------------------------------------------------
+# Cliente OpenAI — singleton para no recrearlo en cada request
+# ---------------------------------------------------------------------------
+
+_openai_client = None
+
+
+def _get_cliente_openai():
+    global _openai_client
+    if _openai_client is None:
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise RuntimeError("openai no instalado. Ejecutá: pip install openai")
+        if not OPENAI_KEY:
+            raise RuntimeError("OPENAI_API_KEY no configurada en .env")
+        _openai_client = OpenAI(api_key=OPENAI_KEY, timeout=30.0)
+    return _openai_client
+
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -68,6 +89,13 @@ app.add_middleware(
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def _verificar_configuracion():
+    advertencias = verificar_entorno()
+    if advertencias:
+        logger.error("Configuración incompleta — revisá tu .env antes de hacer consultas")
 
 # ---------------------------------------------------------------------------
 # Modelos Pydantic
@@ -113,17 +141,14 @@ def llamar_llm(mensajes: list[dict]) -> str:
     """
     Envía los mensajes a OpenAI en formato chat (system + user)
     y retorna el texto de la respuesta.
-    Maneja errores de API, timeout y rate limit con mensajes claros.
+    Usa el cliente singleton. Reintenta hasta 3 veces con backoff exponencial.
     """
     try:
-        from openai import OpenAI, APIError, APITimeoutError, RateLimitError
+        from openai import APIError, APITimeoutError, RateLimitError
     except ImportError:
         raise RuntimeError("openai no instalado. Ejecutá: pip install openai")
 
-    if not OPENAI_KEY:
-        raise RuntimeError("OPENAI_API_KEY no configurada en .env")
-
-    cliente = OpenAI(api_key=OPENAI_KEY, timeout=30.0)
+    cliente = _get_cliente_openai()
     max_intentos = 3
 
     for intento in range(1, max_intentos + 1):
@@ -181,7 +206,8 @@ async def consulta(request: ConsultaRequest):
       5. Retorna la respuesta estructurada
     """
     tiempo_inicio = time.time()
-    logger.info(f"Consulta recibida: '{request.pregunta[:80]}...'")
+    preview = request.pregunta[:80] + ("..." if len(request.pregunta) > 80 else "")
+    logger.info(f"Consulta recibida: '{preview}'")
 
     # --- 1. Validar pregunta ---
     try:
